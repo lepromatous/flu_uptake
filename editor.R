@@ -139,20 +139,69 @@ svi %>%
 # merge and drop svi ----
 df <- merge(df, svi, by.x="fips", by.y="geoid", all.x=T)
 
+# county deprivation ----
+#devtools::install_github("redivis/redivis-r", ref="main")
+#https://redivis.com/workspace/settings/tokens
+library(redivis)
+Sys.setenv(REDIVIS_API_TOKEN = "AAABFDynqJ9I9vk1cQgIQCsjKxYZkQkn")
+
+user <- redivis::user("cdpdemo")
+dataset <- user$dataset("area_deprivation_index_adi:axrk:v1_0")
+table <- dataset$table("adi_by_county:dbk0")
+
+# Load table as tidyverse tibble
+adi <- table$to_tibble()
+
+adi %>%
+  group_by(county_fips_code) %>%
+  arrange(year) %>%
+  filter(year !=2019) %>%
+  mutate(
+    adi_diff = lag(area_deprivation_index_percent) - area_deprivation_index_percent
+  ) %>%
+  filter(year==2020) %>%
+  ungroup() -> adi_diff
+
+adi %>%
+  filter(
+    year == 2020
+  ) %>%
+  select(
+    c(county_fips_code, area_deprivation_index_percent)
+    ) %>%
+  rename(
+    fips = 1,
+    adi = 2
+    )-> adi
+
+df <- merge(df, adi, by="fips", all.x=T)
+df <- merge(df, adi_diff[,c("county_fips_code", "adi_diff")], by.x="fips", by.y="county_fips_code", all.x=T)
+
+# new rate calc sq mi ----
+df$rate_sqmi <- df$`n()` / df$area_sqmi *100
+
+
+
 # create biscale data ----
-data <- bi_class(df, x = svi, y = coverage_estimate, style = "quantile", dim = 3)
+data <- bi_class(df, x = adi_diff, y = coverage_estimate, style = "quantile", dim = 3)
+
+# colors ----
+custom_pal <- bi_pal_manual(val_1_1 = "#d73027", val_1_2 = "#f46d43", val_1_3 = "#fdae61",
+                            val_2_1 = "#fee08b", val_2_2 = "#ffffbf", val_2_3 = "#d9ef8b",
+                            val_3_1 = "#a6d96a", val_3_2 = "#66bd63", val_3_3 = "#1a9850"
+)
 
 # map biscale ----
 map <- ggplot() +
   geom_sf(data = data, mapping = aes(fill = bi_class), color = "white", size = 0.1, show.legend = FALSE) +
-  bi_scale_fill(pal = custom_pal, dim = 3) +
+  bi_scale_fill(pal = "DkBlue", dim = 3) +
   labs(
-    title = "Influenza Vaccine Uptake and SVI",
+    title = "Influenza Vaccine Uptake and 2018/2020 ADI Change",
   ) +
   bi_theme()
-legend <- bi_legend(pal = custom_pal,
+legend <- bi_legend(pal = "DkBlue",
                     dim = 3,
-                    xlab = "Higher SVI ",
+                    xlab = "Increase in ADI",
                     ylab = "Higher Uptake ",
                     size = 8)
 finalPlot <- ggdraw() +
@@ -160,7 +209,16 @@ finalPlot <- ggdraw() +
   draw_plot(legend, 0.0, .65, 0.2, 0.2)
 finalPlot
 
-custom_pal <- bi_pal_manual(val_1_1 = "#d73027", val_1_2 = "#f46d43", val_1_3 = "#fdae61",
-                            val_2_1 = "#fee08b", val_2_2 = "#ffffbf", val_2_3 = "#d9ef8b",
-                            val_3_1 = "#a6d96a", val_3_2 = "#66bd63", val_3_3 = "#1a9850"
-                            )
+
+source("~/Library/CloudStorage/OneDrive-Pfizer/Documents/Research/zz useful R code/map binning.R")
+df <- map_breaks(.data = df, var = "adi_diff", newvar = "adi_diff_cat", classes = 3, style = "quantile", clean_labels = TRUE, dig_lab = 10)
+
+
+ggplot() +
+  geom_sf(data = df, mapping = aes(fill = adi_diff_cat), color = "white", size = 0.1) +
+  scale_fill_manual(values = rev(RColorBrewer::brewer.pal(3, "Set1")), labels = c("Got Better", "Stayed the Same", "Got Worse", "Missing"), na.value="gray65") +
+  labs(
+    fill = "2018/2020 Delta ADI"
+  ) + 
+  theme_map()
+
